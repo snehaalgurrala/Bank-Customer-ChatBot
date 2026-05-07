@@ -26,7 +26,7 @@ def api_get(path: str):
 
 
 def ensure_state() -> None:
-    st.session_state.setdefault("customer_id", None)
+    st.session_state.setdefault("user_id", None)
     st.session_state.setdefault("messages", [])
 
 
@@ -67,7 +67,7 @@ with tab_chat:
         with st.chat_message("assistant"):
             with st.spinner("Checking the loan knowledge base..."):
                 try:
-                    payload = {"message": prompt, "customer_id": st.session_state.customer_id}
+                    payload = {"message": prompt, "user_id": st.session_state.user_id}
                     data = api_post("/chat", json=payload)
                     answer = data["answer"]
                     st.markdown(answer)
@@ -92,12 +92,12 @@ with tab_profile:
             submitted = st.form_submit_button("Create or load customer")
             if submitted:
                 try:
-                    customer = api_post(
+                    user = api_post(
                         "/customers",
-                        json={"full_name": full_name, "email": email, "phone": phone or None},
+                        json={"name": full_name, "email": email, "phone": phone or None},
                     )
-                    st.session_state.customer_id = customer["id"]
-                    st.success(f"Using customer ID {customer['id']}")
+                    st.session_state.user_id = user["id"]
+                    st.success(f"Using user ID {user['id']}")
                 except requests.RequestException as exc:
                     st.error(f"Customer save failed: {exc}")
 
@@ -106,24 +106,26 @@ with tab_profile:
         with st.form("loan_form"):
             loan_type = st.selectbox("Loan type", ["Personal Loan", "Home Loan", "Auto Loan", "Debt Consolidation"])
             amount = st.number_input("Requested amount", min_value=1000.0, value=15000.0, step=500.0)
-            annual_income = st.number_input("Annual income", min_value=1000.0, value=72000.0, step=1000.0)
-            credit_score = st.slider("Credit score", min_value=300, max_value=850, value=710)
+            monthly_income = st.number_input("Monthly income", min_value=1000.0, value=6000.0, step=500.0)
+            employment_type = st.selectbox("Employment type", ["Salaried", "Self-employed", "Contract", "Retired"])
+            existing_emi = st.number_input("Existing EMI", min_value=0.0, value=450.0, step=50.0)
             notes = st.text_area("Notes", value="Interested in monthly payment estimates and document requirements.")
             submitted = st.form_submit_button("Submit application")
             if submitted:
-                if not st.session_state.customer_id:
+                if not st.session_state.user_id:
                     st.warning("Create or load a customer first.")
                 else:
                     try:
                         application = api_post(
                             "/loan-applications",
                             json={
-                                "customer_id": st.session_state.customer_id,
+                                "user_id": st.session_state.user_id,
                                 "loan_type": loan_type,
-                                "amount": amount,
-                                "annual_income": annual_income,
-                                "credit_score": credit_score,
-                                "notes": notes,
+                                "loan_amount": amount,
+                                "monthly_income": monthly_income,
+                                "employment_type": employment_type,
+                                "existing_emi": existing_emi,
+                                "remarks": notes,
                             },
                         )
                         st.success(f"Application #{application['id']} submitted.")
@@ -137,7 +139,7 @@ with tab_uploads:
         try:
             headers = {"X-Filename": uploaded.name, "X-Content-Type": uploaded.type or "application/octet-stream"}
             document = api_post("/documents/upload", data=uploaded.getvalue(), headers=headers)
-            st.success(f"Indexed {document['indexed_chunks']} chunks from {document['filename']}.")
+            st.success(f"Stored {document['document_type']} at {document['file_path']}.")
         except requests.RequestException as exc:
             st.error(f"Upload failed: {exc}")
 

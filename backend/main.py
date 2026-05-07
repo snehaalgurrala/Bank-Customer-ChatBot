@@ -7,16 +7,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
 from backend.schemas import (
+    AdminReviewRead,
     ChatRequest,
     ChatResponse,
-    CustomerCreate,
-    CustomerRead,
     DocumentRead,
     HealthResponse,
     LoanApplicationCreate,
     LoanApplicationRead,
+    UserCreate,
+    UserRead,
 )
-from database.models import ChatMessage, Customer, LoanApplication, UploadedDocument
+from database.models import AdminReview, ChatbotLog, Document, LoanApplication, User
 from database.seed import seed_demo_data
 from database.session import SessionLocal, get_db, init_db
 from utils.config import get_settings
@@ -47,35 +48,52 @@ def health() -> HealthResponse:
     return HealthResponse(status="ok", app_name=settings.app_name)
 
 
-@app.post("/customers", response_model=CustomerRead)
-def create_customer(payload: CustomerCreate, db: Session = Depends(get_db)) -> Customer:
-    existing = db.query(Customer).filter(Customer.email == payload.email).first()
+@app.post("/users", response_model=UserRead)
+def create_user(payload: UserCreate, db: Session = Depends(get_db)) -> User:
+    existing = db.query(User).filter(User.email == payload.email).first()
     if existing:
         return existing
-    customer = Customer(**payload.model_dump())
-    db.add(customer)
+    user = User(**payload.model_dump())
+    db.add(user)
     db.commit()
-    db.refresh(customer)
-    return customer
+    db.refresh(user)
+    return user
+
+
+@app.post("/customers", response_model=UserRead)
+def create_customer(payload: UserCreate, db: Session = Depends(get_db)) -> User:
+    return create_user(payload, db)
 
 
 @app.post("/loan-applications", response_model=LoanApplicationRead)
 def create_loan_application(payload: LoanApplicationCreate, db: Session = Depends(get_db)) -> LoanApplication:
-    customer = db.get(Customer, payload.customer_id)
-    if not customer:
-        raise HTTPException(status_code=404, detail="Customer not found")
-    application = LoanApplication(**payload.model_dump(), status="submitted")
+    user = db.get(User, payload.user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    application = LoanApplication(
+        **payload.model_dump(),
+        application_status="submitted",
+        credit_decision="pending",
+        risk_score=_calculate_risk_score(payload),
+    )
     db.add(application)
     db.commit()
     db.refresh(application)
     return application
 
 
-@app.get("/loan-applications/{customer_id}", response_model=list[LoanApplicationRead])
-def list_loan_applications(customer_id: int, db: Session = Depends(get_db)) -> list[LoanApplication]:
+def _calculate_risk_score(payload: LoanApplicationCreate) -> float:
+    emi_ratio = payload.existing_emi / max(payload.monthly_income, 1)
+    amount_ratio = payload.loan_amount / max(payload.monthly_income * 12, 1)
+    risk_score = min(0.95, (emi_ratio * 0.55) + (amount_ratio * 0.25))
+    return round(risk_score, 2)
+
+
+@app.get("/loan-applications/{user_id}", response_model=list[LoanApplicationRead])
+def list_loan_applications(user_id: int, db: Session = Depends(get_db)) -> list[LoanApplication]:
     return (
         db.query(LoanApplication)
-        .filter(LoanApplication.customer_id == customer_id)
+        .filter(LoanApplication.user_id == user_id)
         .order_by(LoanApplication.created_at.desc())
         .all()
     )
@@ -83,27 +101,21 @@ def list_loan_applications(customer_id: int, db: Session = Depends(get_db)) -> l
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(payload: ChatRequest, db: Session = Depends(get_db)) -> ChatResponse:
-    if payload.customer_id and not db.get(Customer, payload.customer_id):
-        raise HTTPException(status_code=404, detail="Customer not found")
-
-    db.add(ChatMessage(customer_id=payload.customer_id, role="user", content=payload.message))
-    db.commit()
+    if payload.user_id and not db.get(User, payload.user_id):
+        raise HTTPException(status_code=404, detail="User not found")
 
     context, sources = retrieve_context(payload.message)
-    history_rows = (
-        db.query(ChatMessage)
-        .filter(ChatMessage.customer_id == payload.customer_id)
-        .order_by(ChatMessage.created_at.desc())
-        .limit(8)
-        .all()
-    )
-    conversation = [{"role": row.role, "content": row.content} for row in reversed(history_rows)]
+    history_rows = db.query(ChatbotLog).filter(ChatbotLog.user_id == payload.user_id).order_by(ChatbotLog.timestamp.desc()).limit(4).all()
+    conversation: list[dict[str, str]] = []
+    for row in reversed(history_rows):
+        conversation.append({"role": "user", "content": row.message})
+        conversation.append({"role": "assistant", "content": row.bot_response})
     try:
         answer = chat_completion(payload.message, context=context, conversation=conversation)
     except OpenRouterError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    db.add(ChatMessage(customer_id=payload.customer_id, role="assistant", content=answer))
+    db.add(ChatbotLog(user_id=payload.user_id, message=payload.message, bot_response=answer))
     db.commit()
     return ChatResponse(answer=answer, sources=sources)
 
@@ -114,7 +126,7 @@ async def upload_document(
     x_filename: str = Header(..., alias="X-Filename"),
     x_content_type: str | None = Header(None, alias="X-Content-Type"),
     db: Session = Depends(get_db),
-) -> UploadedDocument:
+) -> Document:
     suffix = Path(x_filename).suffix.lower()
     if suffix not in {".txt", ".md", ".pdf"}:
         raise HTTPException(status_code=400, detail="Only .txt, .md, and .pdf files are supported")
@@ -133,11 +145,12 @@ async def upload_document(
         destination.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    document = UploadedDocument(
-        filename=safe_name,
-        stored_path=str(destination),
-        content_type=x_content_type,
-        indexed_chunks=chunks,
+    document = Document(
+        application_id=None,
+        document_type=x_content_type or suffix.removeprefix("."),
+        file_path=str(destination),
+        verification_status="indexed",
+        remarks=f"Indexed {chunks} chunks for chatbot retrieval.",
     )
     db.add(document)
     db.commit()
@@ -152,5 +165,10 @@ def index_samples() -> dict[str, int]:
 
 
 @app.get("/documents", response_model=list[DocumentRead])
-def list_documents(db: Session = Depends(get_db)) -> list[UploadedDocument]:
-    return db.query(UploadedDocument).order_by(UploadedDocument.created_at.desc()).all()
+def list_documents(db: Session = Depends(get_db)) -> list[Document]:
+    return db.query(Document).order_by(Document.uploaded_at.desc()).all()
+
+
+@app.get("/admin-reviews", response_model=list[AdminReviewRead])
+def list_admin_reviews(db: Session = Depends(get_db)) -> list[AdminReview]:
+    return db.query(AdminReview).order_by(AdminReview.reviewed_at.desc()).all()

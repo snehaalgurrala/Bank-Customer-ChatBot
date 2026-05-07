@@ -6,53 +6,85 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database.session import Base
 
 
-class Customer(Base):
-    __tablename__ = "customers"
+class User(Base):
+    __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    full_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
     email: Mapped[str] = mapped_column(String(180), unique=True, index=True, nullable=False)
     phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(40), default="customer", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
-    loan_applications: Mapped[list["LoanApplication"]] = relationship(back_populates="customer")
-    chats: Mapped[list["ChatMessage"]] = relationship(back_populates="customer")
+    loan_applications: Mapped[list["LoanApplication"]] = relationship(back_populates="user")
+    chatbot_logs: Mapped[list["ChatbotLog"]] = relationship(back_populates="user")
+    admin_reviews: Mapped[list["AdminReview"]] = relationship(
+        back_populates="admin",
+        foreign_keys="AdminReview.admin_id",
+    )
 
 
 class LoanApplication(Base):
     __tablename__ = "loan_applications"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     loan_type: Mapped[str] = mapped_column(String(60), nullable=False)
-    amount: Mapped[float] = mapped_column(Float, nullable=False)
-    annual_income: Mapped[float] = mapped_column(Float, nullable=False)
-    credit_score: Mapped[int] = mapped_column(Integer, nullable=False)
-    status: Mapped[str] = mapped_column(String(40), default="submitted")
-    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    loan_amount: Mapped[float] = mapped_column(Float, nullable=False)
+    monthly_income: Mapped[float] = mapped_column(Float, nullable=False)
+    employment_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    existing_emi: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    application_status: Mapped[str] = mapped_column(String(40), default="submitted", nullable=False)
+    credit_decision: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    risk_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
-    customer: Mapped[Customer] = relationship(back_populates="loan_applications")
-
-
-class ChatMessage(Base):
-    __tablename__ = "chat_messages"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"), nullable=True)
-    role: Mapped[str] = mapped_column(String(20), nullable=False)
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-    customer: Mapped[Customer | None] = relationship(back_populates="chats")
+    user: Mapped[User] = relationship(back_populates="loan_applications")
+    documents: Mapped[list["Document"]] = relationship(back_populates="application")
+    admin_reviews: Mapped[list["AdminReview"]] = relationship(back_populates="application")
 
 
-class UploadedDocument(Base):
-    __tablename__ = "uploaded_documents"
+class Document(Base):
+    __tablename__ = "documents"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    filename: Mapped[str] = mapped_column(String(255), nullable=False)
-    stored_path: Mapped[str] = mapped_column(String(500), nullable=False)
-    content_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    indexed_chunks: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    application_id: Mapped[int | None] = mapped_column(
+        ForeignKey("loan_applications.id"),
+        nullable=True,
+        index=True,
+    )
+    document_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    verification_status: Mapped[str] = mapped_column(String(40), default="pending", nullable=False)
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    application: Mapped[LoanApplication | None] = relationship(back_populates="documents")
+
+
+class ChatbotLog(Base):
+    __tablename__ = "chatbot_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    bot_response: Mapped[str] = mapped_column(Text, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    user: Mapped[User | None] = relationship(back_populates="chatbot_logs")
+
+
+class AdminReview(Base):
+    __tablename__ = "admin_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    application_id: Mapped[int] = mapped_column(ForeignKey("loan_applications.id"), nullable=False, index=True)
+    admin_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    decision: Mapped[str] = mapped_column(String(60), nullable=False)
+    remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    application: Mapped[LoanApplication] = relationship(back_populates="admin_reviews")
+    admin: Mapped[User] = relationship(back_populates="admin_reviews", foreign_keys=[admin_id])

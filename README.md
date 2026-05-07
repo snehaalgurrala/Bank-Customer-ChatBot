@@ -38,6 +38,18 @@ Copy-Item .env.example .env
 
 4. Edit `.env` and set `OPENROUTER_API_KEY`.
 
+5. Initialize the SQLite database and seed demo data.
+
+```powershell
+python -m database.init_db
+```
+
+For an existing local development database from an older schema, recreate the tables:
+
+```powershell
+python -m database.init_db --reset
+```
+
 ## Run the backend
 
 ```powershell

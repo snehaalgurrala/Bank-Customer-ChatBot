@@ -17,6 +17,16 @@ The project separates user interface, API orchestration, storage, and retrieval 
 - Chroma persistence: `vectorstore/chroma/`
 - Starter knowledge: `sample_data/`
 
+## Database tables
+
+- `users`
+- `loan_applications`
+- `documents`
+- `chatbot_logs`
+- `admin_reviews`
+
+Run `python -m database.init_db` to create tables and insert demo seed data. For an older local development database, run `python -m database.init_db --reset`.
+
 ## Production notes
 
 - Replace local fake embeddings with a production embedding provider.
