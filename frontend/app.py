@@ -7,7 +7,7 @@ import requests
 import streamlit as st
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 API_URL = os.getenv("FRONTEND_API_URL", "http://127.0.0.1:8000").rstrip("/")
 
