@@ -15,3 +15,6 @@ uploads/*
 !uploads/README.md
 vectorstore/chroma/*
 !vectorstore/README.md
+
+# Accidental nested clone folder; the actual project lives at repo root.
+Bank-Customer-ChatBot/
