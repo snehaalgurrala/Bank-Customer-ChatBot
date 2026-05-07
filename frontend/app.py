@@ -14,19 +14,27 @@ st.set_page_config(page_title="Loan Assistance Chatbot", page_icon=":bank:", lay
 
 
 def api_post(path: str, **kwargs):
-    response = requests.post(f"{API_URL}{path}", timeout=60, **kwargs)
+    headers = kwargs.pop("headers", {})
+    if st.session_state.get("access_token"):
+        headers = {"Authorization": f"Bearer {st.session_state.access_token}", **headers}
+    response = requests.post(f"{API_URL}{path}", headers=headers, timeout=60, **kwargs)
     response.raise_for_status()
     return response.json()
 
 
 def api_get(path: str):
-    response = requests.get(f"{API_URL}{path}", timeout=30)
+    headers = {}
+    if st.session_state.get("access_token"):
+        headers["Authorization"] = f"Bearer {st.session_state.access_token}"
+    response = requests.get(f"{API_URL}{path}", headers=headers, timeout=30)
     response.raise_for_status()
     return response.json()
 
 
 def ensure_state() -> None:
     st.session_state.setdefault("user_id", None)
+    st.session_state.setdefault("access_token", None)
+    st.session_state.setdefault("application_id", None)
     st.session_state.setdefault("messages", [])
 
 
@@ -43,6 +51,18 @@ with st.sidebar:
         st.success(f"{health['status']} - {health['app_name']}")
     except requests.RequestException as exc:
         st.error(f"Backend unavailable: {exc}")
+
+    with st.form("login_form"):
+        email = st.text_input("Email", value="demo.customer@example.com")
+        password = st.text_input("Password", value="CustomerPass123!", type="password")
+        if st.form_submit_button("Log in"):
+            try:
+                data = api_post("/login", json={"email": email, "password": password})
+                st.session_state.access_token = data["access_token"]
+                st.session_state.user_id = data["user"]["id"]
+                st.success(f"Signed in as {data['user']['role']}")
+            except requests.RequestException as exc:
+                st.error(f"Login failed: {exc}")
 
     if st.button("Index sample knowledge"):
         try:
@@ -67,8 +87,7 @@ with tab_chat:
         with st.chat_message("assistant"):
             with st.spinner("Checking the loan knowledge base..."):
                 try:
-                    payload = {"message": prompt, "user_id": st.session_state.user_id}
-                    data = api_post("/chat", json=payload)
+                    data = api_post("/chatbot", json={"message": prompt})
                     answer = data["answer"]
                     st.markdown(answer)
                     if data.get("sources"):
@@ -92,12 +111,18 @@ with tab_profile:
             submitted = st.form_submit_button("Create or load customer")
             if submitted:
                 try:
-                    user = api_post(
-                        "/customers",
-                        json={"name": full_name, "email": email, "phone": phone or None},
+                    data = api_post(
+                        "/signup",
+                        json={
+                            "name": full_name,
+                            "email": email,
+                            "phone": phone or None,
+                            "password": "CustomerPass123!",
+                        },
                     )
-                    st.session_state.user_id = user["id"]
-                    st.success(f"Using user ID {user['id']}")
+                    st.session_state.access_token = data["access_token"]
+                    st.session_state.user_id = data["user"]["id"]
+                    st.success(f"Using user ID {data['user']['id']}")
                 except requests.RequestException as exc:
                     st.error(f"Customer save failed: {exc}")
 
@@ -119,7 +144,6 @@ with tab_profile:
                         application = api_post(
                             "/loan-applications",
                             json={
-                                "user_id": st.session_state.user_id,
                                 "loan_type": loan_type,
                                 "loan_amount": amount,
                                 "monthly_income": monthly_income,
@@ -128,23 +152,25 @@ with tab_profile:
                                 "remarks": notes,
                             },
                         )
+                        st.session_state.application_id = application["id"]
                         st.success(f"Application #{application['id']} submitted.")
                     except requests.RequestException as exc:
                         st.error(f"Application submit failed: {exc}")
 
 with tab_uploads:
     st.subheader("Knowledge documents")
+    app_id = st.number_input("Application ID", min_value=1, value=st.session_state.application_id or 1, step=1)
     uploaded = st.file_uploader("Upload .txt, .md, or .pdf", type=["txt", "md", "pdf"])
     if uploaded and st.button("Upload and index"):
         try:
-            headers = {"X-Filename": uploaded.name, "X-Content-Type": uploaded.type or "application/octet-stream"}
-            document = api_post("/documents/upload", data=uploaded.getvalue(), headers=headers)
+            headers = {"X-Filename": uploaded.name, "X-Document-Type": "supporting_document"}
+            document = api_post(f"/loan-applications/{app_id}/documents", data=uploaded.getvalue(), headers=headers)
             st.success(f"Stored {document['document_type']} at {document['file_path']}.")
         except requests.RequestException as exc:
             st.error(f"Upload failed: {exc}")
 
     try:
-        documents = api_get("/documents")
+        documents = api_get(f"/loan-applications/{app_id}/documents")
         if documents:
             st.dataframe(documents, use_container_width=True)
         else:

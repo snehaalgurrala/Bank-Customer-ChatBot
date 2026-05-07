@@ -3,12 +3,16 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
-class UserCreate(BaseModel):
+class SignupRequest(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=180)
     phone: str | None = None
-    password_hash: str = "pbkdf2:demo-password-hash"
-    role: str = "customer"
+    password: str = Field(min_length=8, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=180)
+    password: str
 
 
 class UserRead(BaseModel):
@@ -22,8 +26,13 @@ class UserRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserRead
+
+
 class LoanApplicationCreate(BaseModel):
-    user_id: int
     loan_type: str = Field(min_length=2, max_length=60)
     loan_amount: float = Field(gt=0)
     monthly_income: float = Field(gt=0)
@@ -34,22 +43,13 @@ class LoanApplicationCreate(BaseModel):
 
 class LoanApplicationRead(LoanApplicationCreate):
     id: int
+    user_id: int
     application_status: str
     credit_decision: str | None
     risk_score: float | None
     created_at: datetime
 
     model_config = {"from_attributes": True}
-
-
-class ChatRequest(BaseModel):
-    message: str = Field(min_length=2)
-    user_id: int | None = None
-
-
-class ChatResponse(BaseModel):
-    answer: str
-    sources: list[dict[str, str]] = []
 
 
 class DocumentRead(BaseModel):
@@ -64,15 +64,25 @@ class DocumentRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class AdminReviewRead(BaseModel):
-    id: int
-    application_id: int
-    admin_id: int
-    decision: str
-    remarks: str | None
-    reviewed_at: datetime
+class DocumentVerificationUpdate(BaseModel):
+    verification_status: str = Field(min_length=2, max_length=40)
+    remarks: str | None = None
 
-    model_config = {"from_attributes": True}
+
+class CreditDecisionUpdate(BaseModel):
+    credit_decision: str = Field(min_length=2, max_length=60)
+    application_status: str | None = Field(default=None, max_length=40)
+    risk_score: float | None = Field(default=None, ge=0, le=1)
+    remarks: str | None = None
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=2)
+
+
+class ChatResponse(BaseModel):
+    answer: str
+    sources: list[dict[str, str]] = []
 
 
 class HealthResponse(BaseModel):

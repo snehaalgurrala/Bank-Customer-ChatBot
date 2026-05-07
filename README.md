@@ -50,6 +50,13 @@ For an existing local development database from an older schema, recreate the ta
 python -m database.init_db --reset
 ```
 
+Seeded local credentials:
+
+```text
+Admin: admin@loanbot.local / AdminPass123!
+Customer: demo.customer@example.com / CustomerPass123!
+```
+
 ## Run the backend
 
 ```powershell

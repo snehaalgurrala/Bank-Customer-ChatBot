@@ -2,39 +2,50 @@
 
 Base URL for local development: `http://127.0.0.1:8000`
 
-## Health
+Authenticated endpoints require:
 
-`GET /health`
+```text
+Authorization: Bearer <access_token>
+```
 
-Returns backend status and app name.
+## Auth
 
-## Customers
+`POST /signup`
 
-`POST /customers`
-
-Creates a customer or returns the existing customer for the submitted email.
+Creates a customer account and returns a JWT.
 
 ```json
 {
   "name": "Demo Customer",
   "email": "demo.customer@example.com",
   "phone": "+1-555-0100",
-  "password_hash": "pbkdf2:demo-password-hash",
-  "role": "customer"
+  "password": "CustomerPass123!"
 }
 ```
 
-`POST /users` accepts the same payload.
+`POST /login`
 
-## Loan applications
-
-`POST /loan-applications`
-
-Creates a starter loan application for an existing user.
+Returns a JWT for a valid user.
 
 ```json
 {
-  "user_id": 1,
+  "email": "admin@loanbot.local",
+  "password": "AdminPass123!"
+}
+```
+
+`GET /me`
+
+Returns the current authenticated user.
+
+## Loan Applications
+
+`POST /loan-applications`
+
+Creates an application for the authenticated customer.
+
+```json
+{
   "loan_type": "Personal Loan",
   "loan_amount": 15000,
   "monthly_income": 6000,
@@ -44,46 +55,79 @@ Creates a starter loan application for an existing user.
 }
 ```
 
-`GET /loan-applications/{user_id}`
+`GET /loan-applications`
 
-Lists applications for a user.
+Lists applications for the authenticated customer.
 
-## Chat
+`GET /loan-applications/{application_id}`
 
-`POST /chat`
-
-Sends a customer question through the RAG pipeline and OpenRouter.
-
-```json
-{
-  "message": "What documents are needed for a home loan?",
-  "user_id": 1
-}
-```
+Returns one application. Customers can access their own applications; admins can access any application.
 
 ## Documents
 
-`POST /documents/upload`
+`POST /loan-applications/{application_id}/documents`
 
-Uploads and indexes `.txt`, `.md`, or `.pdf` knowledge documents.
+Uploads local file bytes into `uploads/` and links the document to an application.
 
 Send raw file bytes with headers:
 
 ```text
-X-Filename: policy.md
-X-Content-Type: text/markdown
+X-Filename: income-proof.pdf
+X-Document-Type: income_proof
 ```
+
+`GET /loan-applications/{application_id}/documents`
+
+Lists documents for an application.
+
+## Admin
+
+`GET /admin/applications`
+
+Lists all loan applications. Requires admin JWT.
+
+`PATCH /admin/documents/{document_id}/verification`
+
+Updates document verification status. Requires admin JWT.
+
+```json
+{
+  "verification_status": "verified",
+  "remarks": "Document is clear and matches the applicant details."
+}
+```
+
+`PATCH /admin/applications/{application_id}/credit-decision`
+
+Updates credit decision and records an admin review. Requires admin JWT.
+
+```json
+{
+  "credit_decision": "manual_review_required",
+  "application_status": "under_review",
+  "risk_score": 0.34,
+  "remarks": "Request latest bank statement before final decision."
+}
+```
+
+## Chatbot
+
+`POST /chatbot`
+
+Sends an authenticated customer question through RAG and OpenRouter.
+
+```json
+{
+  "message": "What documents are needed for a home loan?"
+}
+```
+
+## Utilities
+
+`GET /health`
+
+Returns backend status.
 
 `POST /documents/index-samples`
 
-Indexes the files in `sample_data`.
-
-`GET /documents`
-
-Lists uploaded documents recorded in SQLite.
-
-## Admin reviews
-
-`GET /admin-reviews`
-
-Lists seeded and created admin review records.
+Indexes sample knowledge files. Requires admin JWT.
