@@ -63,8 +63,15 @@ class LoanApplicationRead(LoanApplicationCreate):
     user_id: int
     application_status: str
     credit_decision: str | None
+    approved_amount: float | None
     risk_score: float | None
     created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AdminLoanApplicationRead(LoanApplicationRead):
+    user: UserRead
 
     model_config = {"from_attributes": True}
 
@@ -89,6 +96,7 @@ class DocumentVerificationUpdate(BaseModel):
 class CreditDecisionUpdate(BaseModel):
     credit_decision: str = Field(min_length=2, max_length=60)
     application_status: str | None = Field(default=None, max_length=40)
+    approved_amount: float | None = Field(default=None, ge=0)
     risk_score: float | None = Field(default=None, ge=0, le=1)
     remarks: str | None = None
 

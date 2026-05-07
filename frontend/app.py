@@ -209,6 +209,183 @@ def application_picker(applications: list[dict[str, Any]], key: str) -> int | No
     return labels[selected_label]
 
 
+def admin_application_label(app: dict[str, Any]) -> str:
+    applicant = app.get("user", {})
+    applicant_name = applicant.get("name", f"User {app['user_id']}")
+    return f"#{app['id']} - {applicant_name} - {app['loan_type']} - {status_badge(app['application_status'])}"
+
+
+def filtered_admin_applications(applications: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    statuses = sorted({app["application_status"] for app in applications})
+    selected_status = st.selectbox("Filter by status", ["All"] + statuses, key=key)
+    if selected_status == "All":
+        return applications
+    return [app for app in applications if app["application_status"] == selected_status]
+
+
+def admin_application_selector(applications: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
+    if not applications:
+        st.info("No applications match the selected filter.")
+        return None
+    labels = {admin_application_label(app): app for app in applications}
+    label = st.selectbox("Select application", list(labels.keys()), key=key)
+    return labels[label]
+
+
+def render_applicant_details(application: dict[str, Any]) -> None:
+    applicant = application.get("user", {})
+    st.subheader("Applicant Details")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Applicant", applicant.get("name", "-"))
+    col2.metric("Email", applicant.get("email", "-"))
+    col3.metric("Phone", applicant.get("phone") or "-")
+
+    st.subheader("Loan Details")
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Requested", money(application.get("loan_amount")))
+    col2.metric("Approved", money(application.get("approved_amount")))
+    col3.metric("Monthly income", money(application.get("monthly_income")))
+    col4.metric("Risk score", application.get("risk_score") if application.get("risk_score") is not None else "-")
+    st.caption(application.get("remarks") or "No remarks added yet.")
+
+
+def render_document_review(application_id: int) -> None:
+    st.subheader("Uploaded Documents")
+    try:
+        documents = api_request("GET", f"/loan-applications/{application_id}/documents")
+    except Exception as exc:
+        st.error(f"Could not load documents: {exc}")
+        return
+    if not documents:
+        st.info("No documents uploaded for this application.")
+        return
+
+    st.dataframe(documents, use_container_width=True, hide_index=True)
+    document_options = {
+        f"#{doc['id']} - {doc['document_type']} - {status_badge(doc['verification_status'])}": doc
+        for doc in documents
+    }
+    selected_doc_label = st.selectbox("Document to review", list(document_options.keys()), key=f"doc_select_{application_id}")
+    selected_doc = document_options[selected_doc_label]
+
+    with st.form(f"document_review_form_{selected_doc['id']}"):
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            verification_status = st.selectbox(
+                "Verification status",
+                ["verified", "rejected", "needs_resubmission", "pending"],
+                index=["verified", "rejected", "needs_resubmission", "pending"].index(selected_doc["verification_status"])
+                if selected_doc["verification_status"] in ["verified", "rejected", "needs_resubmission", "pending"]
+                else 3,
+            )
+        with col2:
+            remarks = st.text_area("Document remarks", value=selected_doc.get("remarks") or "")
+        submitted = st.form_submit_button("Update document review", use_container_width=True)
+        if submitted:
+            try:
+                document = api_request(
+                    "PATCH",
+                    f"/admin/documents/{selected_doc['id']}/verification",
+                    json={"verification_status": verification_status, "remarks": remarks or None},
+                )
+                st.success(f"Document #{document['id']} marked {document['verification_status']}.")
+            except Exception as exc:
+                st.error(f"Document update failed: {exc}")
+
+
+def render_credit_decision(application: dict[str, Any]) -> None:
+    st.subheader("Credit Decision")
+    with st.form(f"credit_decision_form_{application['id']}"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            credit_decision = st.selectbox(
+                "Credit decision",
+                ["approved", "rejected", "manual_review_required", "needs_documents", "pending"],
+                index=["approved", "rejected", "manual_review_required", "needs_documents", "pending"].index(
+                    application.get("credit_decision") or "pending"
+                )
+                if (application.get("credit_decision") or "pending")
+                in ["approved", "rejected", "manual_review_required", "needs_documents", "pending"]
+                else 4,
+            )
+        with col2:
+            application_status = st.selectbox(
+                "Application status",
+                ["approved", "rejected", "pending", "submitted", "under_review", "needs_documents"],
+                index=["approved", "rejected", "pending", "submitted", "under_review", "needs_documents"].index(
+                    application.get("application_status") or "pending"
+                )
+                if (application.get("application_status") or "pending")
+                in ["approved", "rejected", "pending", "submitted", "under_review", "needs_documents"]
+                else 2,
+            )
+        with col3:
+            approved_amount = st.number_input(
+                "Approved amount",
+                min_value=0.0,
+                value=float(application.get("approved_amount") or application.get("loan_amount") or 0),
+                step=500.0,
+            )
+        risk_score = st.slider("Risk score", 0.0, 1.0, float(application.get("risk_score") or 0.5), 0.01)
+        remarks = st.text_area("Credit remarks", value=application.get("remarks") or "")
+        submitted = st.form_submit_button("Save credit decision", use_container_width=True)
+        if submitted:
+            try:
+                updated = api_request(
+                    "PATCH",
+                    f"/admin/applications/{application['id']}/credit-decision",
+                    json={
+                        "credit_decision": credit_decision,
+                        "application_status": application_status,
+                        "approved_amount": approved_amount,
+                        "risk_score": risk_score,
+                        "remarks": remarks or None,
+                    },
+                )
+                st.success(f"Application #{updated['id']} updated.")
+            except Exception as exc:
+                st.error(f"Credit decision update failed: {exc}")
+
+
+def render_ai_credit_summary(application: dict[str, Any]) -> None:
+    st.subheader("AI Credit Summary")
+    if st.button("Generate AI credit summary", use_container_width=True):
+        prompt = (
+            "Generate a concise admin credit summary for this application. "
+            "Include application status, document readiness, eligibility, credit decision, risk score, "
+            "pending reasons, and recommended next action."
+        )
+        try:
+            data = api_request("POST", "/chatbot", json={"message": prompt, "application_id": application["id"]})
+            st.success("AI summary generated.")
+            st.markdown(data["answer"])
+        except Exception as exc:
+            st.error(f"AI summary failed: {exc}")
+
+
+def admin_review_workspace(scope: str) -> None:
+    try:
+        applications = fetch_admin_applications()
+    except Exception as exc:
+        st.error(f"Could not load admin applications: {exc}")
+        return
+    filtered = filtered_admin_applications(applications, f"{scope}_status_filter")
+    selected = admin_application_selector(filtered, f"{scope}_application_select")
+    if not selected:
+        return
+
+    st.divider()
+    tabs = st.tabs(["Applicant", "Documents", "Credit Decision", "AI Summary"])
+    with tabs[0]:
+        render_applicant_details(selected)
+    with tabs[1]:
+        render_document_review(selected["id"])
+    with tabs[2]:
+        render_credit_decision(selected)
+    with tabs[3]:
+        render_ai_credit_summary(selected)
+
+
 def applicant_dashboard_page() -> None:
     page_header("Applicant Dashboard", "Review your loan activity and continue your application.")
     try:
@@ -349,7 +526,7 @@ def chatbot_page() -> None:
 
 
 def admin_dashboard_page() -> None:
-    page_header("Admin Dashboard", "Monitor all customer loan applications.")
+    page_header("Admin Dashboard", "Review applications, documents, decisions, and AI credit summaries.")
     try:
         applications = fetch_admin_applications()
     except Exception as exc:
@@ -362,7 +539,6 @@ def admin_dashboard_page() -> None:
     col1.metric("Total applications", len(applications))
     col2.metric("Pending review", pending)
     col3.metric("Portfolio requested", money(total_requested))
-    st.dataframe(applications, use_container_width=True, hide_index=True)
 
     if st.button("Index sample knowledge", use_container_width=True):
         try:
@@ -371,79 +547,17 @@ def admin_dashboard_page() -> None:
         except Exception as exc:
             st.error(f"Indexing failed: {exc}")
 
+    admin_review_workspace("admin_dashboard")
+
 
 def admin_document_review_page() -> None:
     page_header("Admin Document Review", "Verify documents submitted for loan applications.")
-    try:
-        applications = fetch_admin_applications()
-    except Exception as exc:
-        st.error(f"Could not load applications: {exc}")
-        return
-    application_id = application_picker(applications, "admin_doc_application")
-    if not application_id:
-        return
-    try:
-        documents = api_request("GET", f"/loan-applications/{application_id}/documents")
-    except Exception as exc:
-        st.error(f"Could not load documents: {exc}")
-        return
-    if not documents:
-        st.info("No documents uploaded for this application.")
-        return
-
-    st.dataframe(documents, use_container_width=True, hide_index=True)
-    document_options = {f"#{doc['id']} - {doc['document_type']} - {status_badge(doc['verification_status'])}": doc["id"] for doc in documents}
-    selected_doc = st.selectbox("Document to review", list(document_options.keys()))
-    with st.form("document_review_form"):
-        verification_status = st.selectbox("Verification status", ["verified", "rejected", "needs_resubmission", "pending"])
-        remarks = st.text_area("Remarks")
-        submitted = st.form_submit_button("Update verification", use_container_width=True)
-        if submitted:
-            try:
-                document = api_request(
-                    "PATCH",
-                    f"/admin/documents/{document_options[selected_doc]}/verification",
-                    json={"verification_status": verification_status, "remarks": remarks or None},
-                )
-                st.success(f"Document #{document['id']} updated to {document['verification_status']}.")
-            except Exception as exc:
-                st.error(f"Document update failed: {exc}")
+    admin_review_workspace("admin_documents")
 
 
 def admin_credit_decision_page() -> None:
     page_header("Admin Credit Decision", "Record approval, rejection, or manual review outcomes.")
-    try:
-        applications = fetch_admin_applications()
-    except Exception as exc:
-        st.error(f"Could not load applications: {exc}")
-        return
-    application_id = application_picker(applications, "admin_credit_application")
-    if not application_id:
-        return
-    application = next(app for app in applications if app["id"] == application_id)
-    st.json(application)
-
-    with st.form("credit_decision_form"):
-        credit_decision = st.selectbox("Credit decision", ["approved", "rejected", "manual_review_required", "needs_documents"])
-        application_status = st.selectbox("Application status", ["approved", "rejected", "under_review", "needs_documents"])
-        risk_score = st.slider("Risk score", 0.0, 1.0, float(application.get("risk_score") or 0.5), 0.01)
-        remarks = st.text_area("Decision remarks")
-        submitted = st.form_submit_button("Update credit decision", use_container_width=True)
-        if submitted:
-            try:
-                updated = api_request(
-                    "PATCH",
-                    f"/admin/applications/{application_id}/credit-decision",
-                    json={
-                        "credit_decision": credit_decision,
-                        "application_status": application_status,
-                        "risk_score": risk_score,
-                        "remarks": remarks or None,
-                    },
-                )
-                st.success(f"Application #{updated['id']} decision updated.")
-            except Exception as exc:
-                st.error(f"Credit decision update failed: {exc}")
+    admin_review_workspace("admin_credit")
 
 
 sidebar()

@@ -109,11 +109,29 @@ def get_credit_decision(db: Session, user: User, application_id: int | None = No
     application = get_user_application(db, user, application_id)
     if not application:
         return {"found": False, "message": "No loan application was found for this user."}
+    documents = db.query(Document).filter(Document.application_id == application.id).all()
+    missing = check_missing_documents(db, user, application.id)
     return {
         "found": True,
         "application_id": application.id,
+        "loan_type": application.loan_type,
+        "requested_amount": application.loan_amount,
+        "approved_amount": application.approved_amount,
+        "monthly_income": application.monthly_income,
+        "existing_emi": application.existing_emi,
+        "employment_type": application.employment_type,
         "credit_decision": application.credit_decision or "pending",
         "application_status": application.application_status,
         "risk_score": application.risk_score,
         "remarks": application.remarks,
+        "documents": [
+            {
+                "document_id": document.id,
+                "document_type": document.document_type,
+                "verification_status": document.verification_status,
+                "remarks": document.remarks,
+            }
+            for document in documents
+        ],
+        "missing_documents": missing.get("missing_documents", []),
     }

@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.schemas import (
+    AdminLoanApplicationRead,
     ChatRequest,
     ChatResponse,
     CreditDecisionUpdate,
@@ -263,7 +264,7 @@ def get_documents_for_application(
     )
 
 
-@app.get("/admin/applications", response_model=list[LoanApplicationRead])
+@app.get("/admin/applications", response_model=list[AdminLoanApplicationRead])
 def admin_view_all_applications(
     _: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
@@ -301,6 +302,8 @@ def admin_update_credit_decision(
     application.credit_decision = payload.credit_decision
     if payload.application_status:
         application.application_status = payload.application_status
+    if payload.approved_amount is not None:
+        application.approved_amount = payload.approved_amount
     if payload.risk_score is not None:
         application.risk_score = payload.risk_score
     if payload.remarks is not None:

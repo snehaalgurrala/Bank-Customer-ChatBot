@@ -37,6 +37,7 @@ class LoanApplication(Base):
     existing_emi: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     application_status: Mapped[str] = mapped_column(String(40), default="submitted", nullable=False)
     credit_decision: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    approved_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
     risk_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

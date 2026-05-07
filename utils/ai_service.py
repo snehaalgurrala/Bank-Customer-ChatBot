@@ -64,7 +64,7 @@ def route_tool(message: str) -> ToolRoute:
     if _contains_any(text, [" am i eligible", " eligible for", " eligibility", " can i get", " qualify for", " afford "]):
         return ToolRoute(ChatbotTool.ELIGIBILITY, "User asked for loan eligibility or eligible amount.")
 
-    if _contains_any(text, [" credit decision", " approved", " rejected", " approval decision", " why rejected"]):
+    if _contains_any(text, [" credit decision", " credit summary", " approved", " rejected", " approval decision", " why rejected"]):
         return ToolRoute(ChatbotTool.CREDIT_DECISION, "User asked about the credit decision.")
 
     if _contains_any(
@@ -183,7 +183,15 @@ def _local_answer(route: ToolRoute, tool_results: dict[str, Any], rag_context: s
         )
 
     if route.tool == ChatbotTool.CREDIT_DECISION:
-        return f"Your current credit decision is {result['credit_decision']}. Status: {result['application_status']}. {result.get('remarks') or ''}".strip()
+        missing_count = len(result.get("missing_documents", []))
+        verified_count = sum(1 for document in result.get("documents", []) if document["verification_status"] == "verified")
+        return (
+            f"Application #{result['application_id']} is {result['application_status']} with credit decision "
+            f"{result['credit_decision']}. Requested amount: {result['requested_amount']}; approved amount: "
+            f"{result.get('approved_amount') or 'not set'}. Risk score: {result.get('risk_score')}. "
+            f"Verified documents: {verified_count}; missing required documents: {missing_count}. "
+            f"Remarks: {result.get('remarks') or 'No remarks.'}"
+        )
 
     return "I could not determine the right action for that question."
 
