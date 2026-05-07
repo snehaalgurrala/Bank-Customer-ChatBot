@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 import requests
 import streamlit as st
@@ -13,167 +14,451 @@ API_URL = os.getenv("FRONTEND_API_URL", "http://127.0.0.1:8000").rstrip("/")
 st.set_page_config(page_title="Loan Assistance Chatbot", page_icon=":bank:", layout="wide")
 
 
-def api_post(path: str, **kwargs):
-    headers = kwargs.pop("headers", {})
-    if st.session_state.get("access_token"):
-        headers = {"Authorization": f"Bearer {st.session_state.access_token}", **headers}
-    response = requests.post(f"{API_URL}{path}", headers=headers, timeout=60, **kwargs)
-    response.raise_for_status()
-    return response.json()
+def init_state() -> None:
+    defaults = {
+        "access_token": None,
+        "user": None,
+        "page": "Login",
+        "chat_messages": [],
+        "selected_application_id": None,
+    }
+    for key, value in defaults.items():
+        st.session_state.setdefault(key, value)
 
 
-def api_get(path: str):
-    headers = {}
-    if st.session_state.get("access_token"):
+init_state()
+
+
+def auth_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
+    headers = dict(extra or {})
+    if st.session_state.access_token:
         headers["Authorization"] = f"Bearer {st.session_state.access_token}"
-    response = requests.get(f"{API_URL}{path}", headers=headers, timeout=30)
-    response.raise_for_status()
+    return headers
+
+
+def api_request(method: str, path: str, **kwargs: Any) -> Any:
+    headers = auth_headers(kwargs.pop("headers", None))
+    response = requests.request(method, f"{API_URL}{path}", headers=headers, timeout=60, **kwargs)
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        detail = response.text
+        try:
+            detail = response.json().get("detail", detail)
+        except ValueError:
+            pass
+        raise RuntimeError(str(detail)) from exc
+    if not response.content:
+        return None
     return response.json()
 
 
-def ensure_state() -> None:
-    st.session_state.setdefault("user_id", None)
-    st.session_state.setdefault("access_token", None)
-    st.session_state.setdefault("application_id", None)
-    st.session_state.setdefault("messages", [])
+def signed_in() -> bool:
+    return bool(st.session_state.access_token and st.session_state.user)
 
 
-ensure_state()
+def is_admin() -> bool:
+    return signed_in() and st.session_state.user.get("role") == "admin"
 
-st.title("AI Customer Loan Assistance Chatbot")
-st.caption("Ask loan questions, submit a starter application, and upload knowledge documents for RAG answers.")
 
-with st.sidebar:
-    st.header("Backend")
-    st.write(API_URL)
-    try:
-        health = api_get("/health")
-        st.success(f"{health['status']} - {health['app_name']}")
-    except requests.RequestException as exc:
-        st.error(f"Backend unavailable: {exc}")
+def set_session(data: dict[str, Any]) -> None:
+    st.session_state.access_token = data["access_token"]
+    st.session_state.user = data["user"]
+    st.session_state.page = "Admin Dashboard" if data["user"]["role"] == "admin" else "Applicant Dashboard"
 
-    with st.form("login_form"):
-        email = st.text_input("Email", value="demo.customer@example.com")
-        password = st.text_input("Password", value="CustomerPass123!", type="password")
-        if st.form_submit_button("Log in"):
-            try:
-                data = api_post("/login", json={"email": email, "password": password})
-                st.session_state.access_token = data["access_token"]
-                st.session_state.user_id = data["user"]["id"]
-                st.success(f"Signed in as {data['user']['role']}")
-            except requests.RequestException as exc:
-                st.error(f"Login failed: {exc}")
 
-    if st.button("Index sample knowledge"):
+def logout() -> None:
+    st.session_state.access_token = None
+    st.session_state.user = None
+    st.session_state.chat_messages = []
+    st.session_state.selected_application_id = None
+    st.session_state.page = "Login"
+
+
+def money(value: float | int | None) -> str:
+    return f"${value:,.2f}" if value is not None else "-"
+
+
+def status_badge(value: str | None) -> str:
+    return (value or "pending").replace("_", " ").title()
+
+
+st.markdown(
+    """
+    <style>
+    .block-container {padding-top: 1.5rem;}
+    div[data-testid="stMetric"] {
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 14px 16px;
+    }
+    .section-note {
+        color: #475569;
+        font-size: 0.95rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+def sidebar() -> None:
+    with st.sidebar:
+        st.title("LoanAssist")
+        st.caption("AI Customer Loan Assistance")
         try:
-            result = api_post("/documents/index-samples")
-            st.success(f"Indexed {result['indexed_chunks']} chunks.")
-        except requests.RequestException as exc:
-            st.error(f"Indexing failed: {exc}")
+            health = api_request("GET", "/health")
+            st.success(f"API {health['status']}")
+        except Exception as exc:
+            st.error(f"API unavailable: {exc}")
 
-tab_chat, tab_profile, tab_uploads = st.tabs(["Chat", "Customer & Loan", "Documents"])
+        if signed_in():
+            user = st.session_state.user
+            st.divider()
+            st.write(user["name"])
+            st.caption(f"{user['email']} | {user['role']}")
+            if st.button("Log out", use_container_width=True):
+                logout()
+                st.rerun()
 
-with tab_chat:
-    for message in st.session_state.messages:
+        st.divider()
+        if not signed_in():
+            pages = ["Login", "Signup"]
+        elif is_admin():
+            pages = ["Admin Dashboard", "Admin Document Review", "Admin Credit Decision", "AI Chatbot"]
+        else:
+            pages = [
+                "Applicant Dashboard",
+                "Loan Application Form",
+                "Document Upload",
+                "Application Status",
+                "AI Chatbot",
+            ]
+
+        current = st.session_state.page if st.session_state.page in pages else pages[0]
+        st.session_state.page = st.radio("Navigation", pages, index=pages.index(current), label_visibility="collapsed")
+
+
+def page_header(title: str, caption: str) -> None:
+    st.title(title)
+    st.caption(caption)
+
+
+def login_page() -> None:
+    page_header("Login", "Access your secure loan assistance workspace.")
+    col_form, col_info = st.columns([1, 1])
+    with col_form:
+        with st.form("login_form"):
+            email = st.text_input("Email", value="demo.customer@example.com")
+            password = st.text_input("Password", value="CustomerPass123!", type="password")
+            submitted = st.form_submit_button("Log in", use_container_width=True)
+            if submitted:
+                try:
+                    data = api_request("POST", "/login", json={"email": email, "password": password})
+                    set_session(data)
+                    st.success("Login successful.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Login failed: {exc}")
+    with col_info:
+        st.subheader("Demo credentials")
+        st.write("Customer: `demo.customer@example.com` / `CustomerPass123!`")
+        st.write("Admin: `admin@loanbot.local` / `AdminPass123!`")
+
+
+def signup_page() -> None:
+    page_header("Signup", "Create a customer account to apply for a loan.")
+    with st.form("signup_form"):
+        name = st.text_input("Full name")
+        email = st.text_input("Email")
+        phone = st.text_input("Phone")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Create account", use_container_width=True)
+        if submitted:
+            try:
+                data = api_request(
+                    "POST",
+                    "/signup",
+                    json={"name": name, "email": email, "phone": phone or None, "password": password},
+                )
+                set_session(data)
+                st.success("Account created.")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Signup failed: {exc}")
+
+
+def fetch_my_applications() -> list[dict[str, Any]]:
+    return api_request("GET", "/loan-applications")
+
+
+def fetch_admin_applications() -> list[dict[str, Any]]:
+    return api_request("GET", "/admin/applications")
+
+
+def application_picker(applications: list[dict[str, Any]], key: str) -> int | None:
+    if not applications:
+        st.info("No applications found.")
+        return None
+    labels = {
+        f"#{app['id']} - {app['loan_type']} - {status_badge(app['application_status'])}": app["id"]
+        for app in applications
+    }
+    selected_label = st.selectbox("Application", list(labels.keys()), key=key)
+    return labels[selected_label]
+
+
+def applicant_dashboard_page() -> None:
+    page_header("Applicant Dashboard", "Review your loan activity and continue your application.")
+    try:
+        applications = fetch_my_applications()
+    except Exception as exc:
+        st.error(f"Could not load applications: {exc}")
+        return
+
+    total_requested = sum(app["loan_amount"] for app in applications)
+    active_count = sum(1 for app in applications if app["application_status"] not in {"approved", "rejected"})
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Applications", len(applications))
+    col2.metric("Active reviews", active_count)
+    col3.metric("Requested amount", money(total_requested))
+
+    st.subheader("Recent applications")
+    if applications:
+        st.dataframe(applications, use_container_width=True, hide_index=True)
+    else:
+        st.info("Start with the Loan Application Form page.")
+
+
+def loan_application_form_page() -> None:
+    page_header("Loan Application Form", "Submit income, employment, and repayment details.")
+    with st.form("loan_application_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            loan_type = st.selectbox("Loan type", ["Personal Loan", "Home Loan", "Auto Loan", "Debt Consolidation"])
+            loan_amount = st.number_input("Loan amount", min_value=1000.0, value=15000.0, step=500.0)
+            monthly_income = st.number_input("Monthly income", min_value=1000.0, value=6000.0, step=500.0)
+        with col2:
+            employment_type = st.selectbox("Employment type", ["Salaried", "Self-employed", "Contract", "Retired"])
+            existing_emi = st.number_input("Existing EMI", min_value=0.0, value=450.0, step=50.0)
+            remarks = st.text_area("Remarks", value="Interested in document and eligibility guidance.")
+        submitted = st.form_submit_button("Submit application", use_container_width=True)
+        if submitted:
+            try:
+                application = api_request(
+                    "POST",
+                    "/loan-applications",
+                    json={
+                        "loan_type": loan_type,
+                        "loan_amount": loan_amount,
+                        "monthly_income": monthly_income,
+                        "employment_type": employment_type,
+                        "existing_emi": existing_emi,
+                        "remarks": remarks,
+                    },
+                )
+                st.session_state.selected_application_id = application["id"]
+                st.success(f"Application #{application['id']} submitted successfully.")
+            except Exception as exc:
+                st.error(f"Application submission failed: {exc}")
+
+
+def document_upload_page() -> None:
+    page_header("Document Upload", "Upload income, identity, and loan supporting files.")
+    try:
+        applications = fetch_my_applications()
+    except Exception as exc:
+        st.error(f"Could not load applications: {exc}")
+        return
+    application_id = application_picker(applications, "upload_application")
+    if not application_id:
+        return
+
+    document_type = st.selectbox("Document type", ["identity_proof", "income_proof", "bank_statement", "address_proof", "other"])
+    uploaded = st.file_uploader("Upload document", type=["txt", "md", "pdf", "png", "jpg", "jpeg"])
+    if uploaded and st.button("Upload document", use_container_width=True):
+        try:
+            document = api_request(
+                "POST",
+                f"/loan-applications/{application_id}/documents",
+                headers={"X-Filename": uploaded.name, "X-Document-Type": document_type},
+                data=uploaded.getvalue(),
+            )
+            st.success(f"Uploaded document #{document['id']} for application #{application_id}.")
+        except Exception as exc:
+            st.error(f"Upload failed: {exc}")
+
+
+def application_status_page() -> None:
+    page_header("Application Status", "Track decisions, review status, and document verification.")
+    try:
+        applications = fetch_my_applications()
+    except Exception as exc:
+        st.error(f"Could not load applications: {exc}")
+        return
+    application_id = application_picker(applications, "status_application")
+    if not application_id:
+        return
+
+    try:
+        application = api_request("GET", f"/loan-applications/{application_id}")
+        documents = api_request("GET", f"/loan-applications/{application_id}/documents")
+    except Exception as exc:
+        st.error(f"Could not load status: {exc}")
+        return
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Application status", status_badge(application["application_status"]))
+    col2.metric("Credit decision", status_badge(application["credit_decision"]))
+    col3.metric("Risk score", application["risk_score"] if application["risk_score"] is not None else "-")
+
+    st.subheader("Application details")
+    st.json(application)
+    st.subheader("Documents")
+    if documents:
+        st.dataframe(documents, use_container_width=True, hide_index=True)
+    else:
+        st.info("No documents uploaded for this application.")
+
+
+def chatbot_page() -> None:
+    page_header("AI Chatbot", "Ask questions about loan eligibility, documents, and next steps.")
+    for message in st.session_state.chat_messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    prompt = st.chat_input("Ask about eligibility, documents, loan types, or application steps")
+    prompt = st.chat_input("Ask a loan question")
     if prompt:
-        st.session_state.messages.append({"role": "user", "content": prompt})
+        st.session_state.chat_messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
-
         with st.chat_message("assistant"):
-            with st.spinner("Checking the loan knowledge base..."):
+            with st.spinner("Reviewing policy knowledge..."):
                 try:
-                    data = api_post("/chatbot", json={"message": prompt})
-                    answer = data["answer"]
-                    st.markdown(answer)
+                    data = api_request("POST", "/chatbot", json={"message": prompt})
+                    st.markdown(data["answer"])
                     if data.get("sources"):
                         with st.expander("Sources"):
                             for source in data["sources"]:
                                 page = f" page {source['page']}" if source.get("page") else ""
                                 st.write(f"{source['source']}{page}")
-                    st.session_state.messages.append({"role": "assistant", "content": answer})
-                except requests.RequestException as exc:
-                    st.error(f"Chat request failed: {exc}")
+                    st.session_state.chat_messages.append({"role": "assistant", "content": data["answer"]})
+                except Exception as exc:
+                    st.error(f"Chatbot request failed: {exc}")
 
-with tab_profile:
-    col_customer, col_loan = st.columns(2)
 
-    with col_customer:
-        st.subheader("Customer")
-        with st.form("customer_form"):
-            full_name = st.text_input("Full name", value="Demo Customer")
-            email = st.text_input("Email", value="demo.customer@example.com")
-            phone = st.text_input("Phone", value="+1-555-0100")
-            submitted = st.form_submit_button("Create or load customer")
-            if submitted:
-                try:
-                    data = api_post(
-                        "/signup",
-                        json={
-                            "name": full_name,
-                            "email": email,
-                            "phone": phone or None,
-                            "password": "CustomerPass123!",
-                        },
-                    )
-                    st.session_state.access_token = data["access_token"]
-                    st.session_state.user_id = data["user"]["id"]
-                    st.success(f"Using user ID {data['user']['id']}")
-                except requests.RequestException as exc:
-                    st.error(f"Customer save failed: {exc}")
-
-    with col_loan:
-        st.subheader("Starter loan application")
-        with st.form("loan_form"):
-            loan_type = st.selectbox("Loan type", ["Personal Loan", "Home Loan", "Auto Loan", "Debt Consolidation"])
-            amount = st.number_input("Requested amount", min_value=1000.0, value=15000.0, step=500.0)
-            monthly_income = st.number_input("Monthly income", min_value=1000.0, value=6000.0, step=500.0)
-            employment_type = st.selectbox("Employment type", ["Salaried", "Self-employed", "Contract", "Retired"])
-            existing_emi = st.number_input("Existing EMI", min_value=0.0, value=450.0, step=50.0)
-            notes = st.text_area("Notes", value="Interested in monthly payment estimates and document requirements.")
-            submitted = st.form_submit_button("Submit application")
-            if submitted:
-                if not st.session_state.user_id:
-                    st.warning("Create or load a customer first.")
-                else:
-                    try:
-                        application = api_post(
-                            "/loan-applications",
-                            json={
-                                "loan_type": loan_type,
-                                "loan_amount": amount,
-                                "monthly_income": monthly_income,
-                                "employment_type": employment_type,
-                                "existing_emi": existing_emi,
-                                "remarks": notes,
-                            },
-                        )
-                        st.session_state.application_id = application["id"]
-                        st.success(f"Application #{application['id']} submitted.")
-                    except requests.RequestException as exc:
-                        st.error(f"Application submit failed: {exc}")
-
-with tab_uploads:
-    st.subheader("Knowledge documents")
-    app_id = st.number_input("Application ID", min_value=1, value=st.session_state.application_id or 1, step=1)
-    uploaded = st.file_uploader("Upload .txt, .md, or .pdf", type=["txt", "md", "pdf"])
-    if uploaded and st.button("Upload and index"):
-        try:
-            headers = {"X-Filename": uploaded.name, "X-Document-Type": "supporting_document"}
-            document = api_post(f"/loan-applications/{app_id}/documents", data=uploaded.getvalue(), headers=headers)
-            st.success(f"Stored {document['document_type']} at {document['file_path']}.")
-        except requests.RequestException as exc:
-            st.error(f"Upload failed: {exc}")
-
+def admin_dashboard_page() -> None:
+    page_header("Admin Dashboard", "Monitor all customer loan applications.")
     try:
-        documents = api_get(f"/loan-applications/{app_id}/documents")
-        if documents:
-            st.dataframe(documents, use_container_width=True)
-        else:
-            st.info("No uploaded documents yet. Sample data can be indexed from the sidebar.")
-    except requests.RequestException:
-        st.info("Start the backend to view indexed documents.")
+        applications = fetch_admin_applications()
+    except Exception as exc:
+        st.error(f"Could not load admin applications: {exc}")
+        return
+    pending = sum(1 for app in applications if app["application_status"] in {"submitted", "under_review"})
+    approved = sum(1 for app in applications if app["credit_decision"] == "approved")
+    total_requested = sum(app["loan_amount"] for app in applications)
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total applications", len(applications))
+    col2.metric("Pending review", pending)
+    col3.metric("Portfolio requested", money(total_requested))
+    st.dataframe(applications, use_container_width=True, hide_index=True)
+
+    if st.button("Index sample knowledge", use_container_width=True):
+        try:
+            result = api_request("POST", "/documents/index-samples")
+            st.success(f"Indexed {result['indexed_chunks']} chunks.")
+        except Exception as exc:
+            st.error(f"Indexing failed: {exc}")
+
+
+def admin_document_review_page() -> None:
+    page_header("Admin Document Review", "Verify documents submitted for loan applications.")
+    try:
+        applications = fetch_admin_applications()
+    except Exception as exc:
+        st.error(f"Could not load applications: {exc}")
+        return
+    application_id = application_picker(applications, "admin_doc_application")
+    if not application_id:
+        return
+    try:
+        documents = api_request("GET", f"/loan-applications/{application_id}/documents")
+    except Exception as exc:
+        st.error(f"Could not load documents: {exc}")
+        return
+    if not documents:
+        st.info("No documents uploaded for this application.")
+        return
+
+    st.dataframe(documents, use_container_width=True, hide_index=True)
+    document_options = {f"#{doc['id']} - {doc['document_type']} - {status_badge(doc['verification_status'])}": doc["id"] for doc in documents}
+    selected_doc = st.selectbox("Document to review", list(document_options.keys()))
+    with st.form("document_review_form"):
+        verification_status = st.selectbox("Verification status", ["verified", "rejected", "needs_resubmission", "pending"])
+        remarks = st.text_area("Remarks")
+        submitted = st.form_submit_button("Update verification", use_container_width=True)
+        if submitted:
+            try:
+                document = api_request(
+                    "PATCH",
+                    f"/admin/documents/{document_options[selected_doc]}/verification",
+                    json={"verification_status": verification_status, "remarks": remarks or None},
+                )
+                st.success(f"Document #{document['id']} updated to {document['verification_status']}.")
+            except Exception as exc:
+                st.error(f"Document update failed: {exc}")
+
+
+def admin_credit_decision_page() -> None:
+    page_header("Admin Credit Decision", "Record approval, rejection, or manual review outcomes.")
+    try:
+        applications = fetch_admin_applications()
+    except Exception as exc:
+        st.error(f"Could not load applications: {exc}")
+        return
+    application_id = application_picker(applications, "admin_credit_application")
+    if not application_id:
+        return
+    application = next(app for app in applications if app["id"] == application_id)
+    st.json(application)
+
+    with st.form("credit_decision_form"):
+        credit_decision = st.selectbox("Credit decision", ["approved", "rejected", "manual_review_required", "needs_documents"])
+        application_status = st.selectbox("Application status", ["approved", "rejected", "under_review", "needs_documents"])
+        risk_score = st.slider("Risk score", 0.0, 1.0, float(application.get("risk_score") or 0.5), 0.01)
+        remarks = st.text_area("Decision remarks")
+        submitted = st.form_submit_button("Update credit decision", use_container_width=True)
+        if submitted:
+            try:
+                updated = api_request(
+                    "PATCH",
+                    f"/admin/applications/{application_id}/credit-decision",
+                    json={
+                        "credit_decision": credit_decision,
+                        "application_status": application_status,
+                        "risk_score": risk_score,
+                        "remarks": remarks or None,
+                    },
+                )
+                st.success(f"Application #{updated['id']} decision updated.")
+            except Exception as exc:
+                st.error(f"Credit decision update failed: {exc}")
+
+
+sidebar()
+
+pages = {
+    "Login": login_page,
+    "Signup": signup_page,
+    "Applicant Dashboard": applicant_dashboard_page,
+    "Loan Application Form": loan_application_form_page,
+    "Document Upload": document_upload_page,
+    "Application Status": application_status_page,
+    "AI Chatbot": chatbot_page,
+    "Admin Dashboard": admin_dashboard_page,
+    "Admin Document Review": admin_document_review_page,
+    "Admin Credit Decision": admin_credit_decision_page,
+}
+
+pages[st.session_state.page]()
