@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.Python
+.venv/
+venv/
+env/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.env
+database/*.db
+database/*.db-journal
+uploads/*
+!uploads/README.md
+vectorstore/chroma/*
+!vectorstore/README.md
