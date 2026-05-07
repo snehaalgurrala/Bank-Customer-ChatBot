@@ -80,6 +80,8 @@ streamlit run frontend/app.py
 3. Ask a loan question in the chat tab.
 4. Upload additional `.txt`, `.md`, or `.pdf` knowledge documents from the Documents tab.
 
+The RAG corpus in `sample_data/` includes policy notes for eligibility, required documents, credit rules, rejection reasons, document verification, and approval workflow.
+
 ## Notes
 
 The starter RAG pipeline uses LangChain with ChromaDB and local deterministic fake embeddings so the project runs without a second AI provider. For production, replace `FakeEmbeddings` in `utils/rag.py` with a real embedding model and add authentication, encrypted storage, audit logging, and compliance review.

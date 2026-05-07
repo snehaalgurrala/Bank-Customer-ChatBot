@@ -145,4 +145,4 @@ Returns backend status.
 
 `POST /documents/index-samples`
 
-Indexes sample knowledge files. Requires admin JWT.
+Indexes sample policy knowledge files into ChromaDB for RAG. Requires admin JWT.

@@ -61,7 +61,41 @@ def _history(db: Session, user: User) -> list[dict[str, str]]:
     return conversation
 
 
-def _local_answer(message: str, tool_results: dict[str, Any]) -> str:
+def _rag_fallback(rag_context: str) -> str | None:
+    if not rag_context.strip():
+        return None
+    snippets: list[str] = []
+    for block in rag_context.split("\n\n---\n\n"):
+        lines = [line.strip() for line in block.splitlines() if line.strip() and not line.startswith("Source:")]
+        if lines:
+            snippets.append(" ".join(lines)[:350])
+    if not snippets:
+        return None
+    return "Based on the loan policy knowledge base: " + " ".join(snippets[:2])
+
+
+def _should_prioritize_policy_context(message: str) -> bool:
+    text = message.lower()
+    user_specific_markers = [" my ", " mine", " missing", " status", "decision", "am i", "eligible for this"]
+    policy_markers = [
+        "what documents are required",
+        "what documents do i need",
+        "what happens after",
+        "process",
+        "workflow",
+        "rejection reasons",
+        "credit decision rules",
+        "document verification",
+    ]
+    padded = f" {text} "
+    return any(marker in text for marker in policy_markers) and not any(marker in padded for marker in user_specific_markers)
+
+
+def _local_answer(message: str, tool_results: dict[str, Any], rag_context: str = "") -> str:
+    if _should_prioritize_policy_context(message):
+        rag_answer = _rag_fallback(rag_context)
+        if rag_answer:
+            return rag_answer
     if "check_missing_documents" in tool_results:
         result = tool_results["check_missing_documents"]
         if result.get("found") and result.get("missing_documents"):
@@ -85,6 +119,9 @@ def _local_answer(message: str, tool_results: dict[str, Any]) -> str:
         result = tool_results["check_application_status"]
         if result.get("found"):
             return f"Application #{result['application_id']} is currently {result['application_status']}. Credit decision: {result.get('credit_decision') or 'pending'}."
+    rag_answer = _rag_fallback(rag_context)
+    if rag_answer:
+        return rag_answer
     return "I could not find an application yet. Please submit a loan application first, then I can check status, documents, eligibility, and credit decision."
 
 
@@ -100,9 +137,9 @@ def answer_user_question(db: Session, user: User, message: str, application_id: 
     try:
         answer = chat_completion(message, context=context, conversation=_history(db, user))
     except OpenRouterError:
-        answer = _local_answer(message, tool_results)
+        answer = _local_answer(message, tool_results, rag_context)
     if "OpenRouter is not configured yet" in answer:
-        answer = _local_answer(message, tool_results)
+        answer = _local_answer(message, tool_results, rag_context)
 
     db.add(ChatbotLog(user_id=user.id, message=message, bot_response=answer))
     db.commit()
