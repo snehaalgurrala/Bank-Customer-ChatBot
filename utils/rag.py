@@ -98,6 +98,7 @@ def store_chunks(chunks: list[Document]) -> int:
         return 0
     vectorstore = get_vectorstore()
     ids = [_chunk_id(chunk) for chunk in chunks]
+    # Refresh existing chunk IDs so repeated indexing is safe during development.
     try:
         vectorstore.delete(ids=ids)
     except Exception:

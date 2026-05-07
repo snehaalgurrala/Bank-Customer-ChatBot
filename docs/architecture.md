@@ -1,28 +1,73 @@
 # Architecture
 
-The project separates user interface, API orchestration, storage, and retrieval logic.
+The project separates UI, API, persistence, local file storage, RAG retrieval, and AI orchestration.
 
-## Runtime flow
+## Text Diagram
 
-1. Streamlit sends customer, loan, upload, and chat requests to FastAPI.
-2. FastAPI stores structured records in SQLite through SQLAlchemy models.
-3. Uploaded files are saved in the local `uploads` folder.
-4. Supported documents are split by LangChain and indexed in ChromaDB.
-5. Chat requests retrieve relevant ChromaDB chunks and pass them to OpenRouter with a banking-safe system prompt.
-6. Database tools add user-specific context for application status, missing documents, eligibility, and credit decisions.
+```text
+Streamlit Frontend
+  |-- Login / Signup
+  |-- Applicant Dashboard
+  |-- Document Upload
+  |-- Admin Dashboard
+  `-- AI Chatbot
+          |
+          | HTTP requests + JWT bearer token
+          v
+FastAPI Backend
+  |-- Auth and role checks
+  |-- Loan application APIs
+  |-- Document upload APIs
+  |-- Admin decision APIs
+  `-- Chatbot endpoint
+          |
+          | SQLAlchemy
+          v
+SQLite Database
+  |-- users
+  |-- loan_applications
+  |-- documents
+  |-- chatbot_logs
+  `-- admin_reviews
+          |
+          v
+Agentic AI Service
+  |-- Application status tool
+  |-- Missing document checker
+  |-- Eligibility calculator
+  |-- Credit decision explanation
+  `-- RAG policy answer tool
+          |
+          | LangChain loaders, chunking, local embeddings
+          v
+ChromaDB Vectorstore
+          |
+          | retrieved context
+          v
+OpenRouter LLM
+```
 
-## Local data
+## Runtime Flow
+
+1. Streamlit sends customer, loan, document, admin, and chat requests to FastAPI.
+2. FastAPI validates requests with Pydantic and authorizes users with JWT.
+3. SQLAlchemy reads and writes structured records in SQLite.
+4. Uploaded files are stored in `uploads/`.
+5. Text, Markdown, and PDF documents can be chunked and indexed into ChromaDB.
+6. The chatbot route chooses one tool based on the user question.
+7. Database tools return application-specific context when needed.
+8. The RAG policy tool retrieves policy chunks from ChromaDB.
+9. OpenRouter receives the selected tool result, RAG context, and conversation history.
+10. Every chatbot exchange is stored in `chatbot_logs`.
+
+## Local Data
 
 - SQLite database: `database/chatbot.db`
 - Uploaded files: `uploads/`
 - Chroma persistence: `vectorstore/chroma/`
-- Starter knowledge: `sample_data/`
+- RAG policy files: `sample_data/`
 
-## RAG Policy Corpus
-
-Sample policy documents cover personal loan eligibility, required documents, credit decision rules, rejection reasons, document verification, and the loan approval workflow. Run `POST /documents/index-samples` as an admin or call `index_policy_documents()` from `utils.rag` to load, chunk, embed, and store the policy corpus in ChromaDB.
-
-## Database tables
+## Database Tables
 
 - `users`
 - `loan_applications`
@@ -30,11 +75,23 @@ Sample policy documents cover personal loan eligibility, required documents, cre
 - `chatbot_logs`
 - `admin_reviews`
 
-Run `python -m database.init_db` to create tables and insert demo seed data. For an older local development database, run `python -m database.init_db --reset`.
+Run:
 
-## Production notes
+```powershell
+python -m database.init_db
+```
 
-- Replace local fake embeddings with a production embedding provider.
+Reset an older local schema:
+
+```powershell
+python -m database.init_db --reset
+```
+
+## Production Notes
+
+- Replace local hash embeddings with a production embedding provider.
 - Restrict CORS origins to approved frontend domains.
-- Add authentication and authorization before handling real customer records.
-- Encrypt sensitive files and never store regulated documents in this demo upload folder.
+- Store documents in encrypted object storage.
+- Add Alembic migrations.
+- Add audit logging for all admin actions.
+- Add automated tests and CI.

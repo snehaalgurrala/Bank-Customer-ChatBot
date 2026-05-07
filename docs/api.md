@@ -119,6 +119,7 @@ Updates credit decision and records an admin review. Requires admin JWT.
 {
   "credit_decision": "manual_review_required",
   "application_status": "under_review",
+  "approved_amount": 12000,
   "risk_score": 0.34,
   "remarks": "Request latest bank statement before final decision."
 }

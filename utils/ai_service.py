@@ -55,6 +55,7 @@ def _extract_requested_amount(message: str) -> float | None:
 def route_tool(message: str) -> ToolRoute:
     text = f" {message.lower()} "
 
+    # Specific customer/account questions take precedence over general policy RAG.
     if _contains_any(text, [" my loan status", " application status", " status of my", " track my", " progress "]):
         return ToolRoute(ChatbotTool.APPLICATION_STATUS, "User asked for application status.")
 
@@ -201,6 +202,7 @@ def answer_user_question(db: Session, user: User, message: str, application_id: 
     tool_results = _run_selected_tool(db, user, route, message, application_id)
     rag_context, sources = retrieve_context(_rag_query_for_route(message, route))
 
+    # OpenRouter receives the selected tool, database result, and retrieved policy context.
     context = (
         "You are an agentic loan chatbot. Use exactly the selected tool result when it exists; "
         "use retrieved policy context for policy questions. Do not invent application data.\n\n"
@@ -217,6 +219,7 @@ def answer_user_question(db: Session, user: User, message: str, application_id: 
     if "OpenRouter is not configured yet" in answer:
         answer = _local_answer(route, tool_results, rag_context)
 
+    # Persist every customer/admin question and generated answer for auditability.
     db.add(ChatbotLog(user_id=user.id, message=message, bot_response=answer))
     db.commit()
     return answer, sources

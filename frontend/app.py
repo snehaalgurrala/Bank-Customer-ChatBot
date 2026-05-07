@@ -37,6 +37,7 @@ def auth_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
 
 
 def api_request(method: str, path: str, **kwargs: Any) -> Any:
+    # Centralized API helper keeps JWT headers and error display consistent.
     headers = auth_headers(kwargs.pop("headers", None))
     response = requests.request(method, f"{API_URL}{path}", headers=headers, timeout=60, **kwargs)
     try:
@@ -364,6 +365,7 @@ def render_ai_credit_summary(application: dict[str, Any]) -> None:
 
 
 def admin_review_workspace(scope: str) -> None:
+    # One admin workspace powers dashboard, document review, and credit decision pages.
     try:
         applications = fetch_admin_applications()
     except Exception as exc:

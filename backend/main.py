@@ -50,6 +50,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 def startup() -> None:
+    # Create SQLite tables and seed demo accounts whenever the API boots locally.
     init_db()
     with SessionLocal() as db:
         seed_demo_data(db)
@@ -64,6 +65,7 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> User:
+    # All protected routes flow through this dependency for JWT verification.
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
     try:
@@ -78,6 +80,7 @@ def get_current_user(
 
 
 def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
+    # Admin routes reuse normal auth, then enforce role-based authorization.
     if current_user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required")
     return current_user
@@ -129,6 +132,7 @@ def create_loan_application(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LoanApplication:
+    # Store the initial risk score from the shared eligibility calculator.
     eligibility = calculate_eligibility(
         monthly_income=payload.monthly_income,
         existing_emi=payload.existing_emi,
@@ -207,6 +211,7 @@ async def upload_document(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Document:
+    # Customers can upload only to their own applications; admins can upload to any application.
     application = db.get(LoanApplication, application_id)
     if not application:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
@@ -225,6 +230,7 @@ async def upload_document(
     destination = settings.upload_dir / stored_name
     destination.write_bytes(body)
 
+    # Text, Markdown, and PDF uploads also become searchable RAG knowledge.
     indexed_chunks = 0
     if suffix in {".txt", ".md", ".pdf"}:
         try:
@@ -296,6 +302,7 @@ def admin_update_credit_decision(
     current_admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ) -> LoanApplication:
+    # A credit decision update also creates an immutable admin review record.
     application = db.get(LoanApplication, application_id)
     if not application:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Application not found")
@@ -327,6 +334,7 @@ def chatbot(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ChatResponse:
+    # The AI service chooses one tool, gathers RAG/database context, and logs the exchange.
     answer, sources = answer_user_question(
         db=db,
         user=current_user,
