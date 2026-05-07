@@ -76,7 +76,12 @@ def check_missing_documents(db: Session, user: User, application_id: int | None 
     }
 
 
-def calculate_application_eligibility(db: Session, user: User, application_id: int | None = None) -> dict[str, Any]:
+def calculate_application_eligibility(
+    db: Session,
+    user: User,
+    application_id: int | None = None,
+    requested_loan_amount: float | None = None,
+) -> dict[str, Any]:
     application = get_user_application(db, user, application_id)
     if not application:
         return {"found": False, "message": "No loan application was found for this user."}
@@ -84,14 +89,15 @@ def calculate_application_eligibility(db: Session, user: User, application_id: i
     eligibility = calculate_eligibility(
         monthly_income=application.monthly_income,
         existing_emi=application.existing_emi,
-        loan_amount=application.loan_amount,
+        loan_amount=requested_loan_amount or application.loan_amount,
         employment_type=application.employment_type,
         missing_documents=missing.get("missing_count", 0),
     )
     return {
         "found": True,
         "application_id": application.id,
-        "loan_amount": application.loan_amount,
+        "loan_amount": requested_loan_amount or application.loan_amount,
+        "stored_application_amount": application.loan_amount,
         "monthly_income": application.monthly_income,
         "existing_emi": application.existing_emi,
         "employment_type": application.employment_type,
