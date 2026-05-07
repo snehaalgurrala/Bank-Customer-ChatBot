@@ -55,6 +55,20 @@ Creates an application for the authenticated customer.
 }
 ```
 
+`POST /loan-applications/eligibility`
+
+Checks estimated eligibility before submission.
+
+```json
+{
+  "monthly_income": 6000,
+  "existing_emi": 450,
+  "loan_amount": 15000,
+  "employment_type": "Salaried",
+  "missing_documents": 0
+}
+```
+
 `GET /loan-applications`
 
 Lists applications for the authenticated customer.
@@ -118,7 +132,8 @@ Sends an authenticated customer question through RAG and OpenRouter.
 
 ```json
 {
-  "message": "What documents are needed for a home loan?"
+  "message": "What documents are needed for a home loan?",
+  "application_id": 1
 }
 ```
 

@@ -41,6 +41,23 @@ class LoanApplicationCreate(BaseModel):
     remarks: str | None = None
 
 
+class EligibilityRequest(BaseModel):
+    monthly_income: float = Field(gt=0)
+    existing_emi: float = Field(default=0, ge=0)
+    loan_amount: float = Field(gt=0)
+    employment_type: str = Field(min_length=2, max_length=80)
+    missing_documents: int = Field(default=0, ge=0)
+
+
+class EligibilityResponse(BaseModel):
+    disposable_income: float
+    emi_capacity: float
+    eligible_amount: float
+    risk_score: float
+    risk_level: str
+    recommendation: str
+
+
 class LoanApplicationRead(LoanApplicationCreate):
     id: int
     user_id: int
@@ -78,6 +95,7 @@ class CreditDecisionUpdate(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=2)
+    application_id: int | None = None
 
 
 class ChatResponse(BaseModel):

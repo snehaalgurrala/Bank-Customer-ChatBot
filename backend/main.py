@@ -15,6 +15,8 @@ from backend.schemas import (
     CreditDecisionUpdate,
     DocumentRead,
     DocumentVerificationUpdate,
+    EligibilityRequest,
+    EligibilityResponse,
     HealthResponse,
     LoanApplicationCreate,
     LoanApplicationRead,
@@ -23,12 +25,13 @@ from backend.schemas import (
     TokenResponse,
     UserRead,
 )
-from database.models import AdminReview, ChatbotLog, Document, LoanApplication, User
+from database.models import AdminReview, Document, LoanApplication, User
 from database.seed import seed_demo_data
 from database.session import SessionLocal, get_db, init_db
 from utils.config import get_settings
-from utils.openrouter_client import OpenRouterError, chat_completion
-from utils.rag import index_file, index_sample_data, retrieve_context
+from utils.ai_service import answer_user_question
+from utils.eligibility import calculate_eligibility
+from utils.rag import index_file, index_sample_data
 from utils.security import TokenError, create_access_token, decode_access_token, hash_password, verify_password
 
 settings = get_settings()
@@ -119,19 +122,18 @@ def me(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 
-def _calculate_risk_score(payload: LoanApplicationCreate) -> float:
-    emi_ratio = payload.existing_emi / max(payload.monthly_income, 1)
-    amount_ratio = payload.loan_amount / max(payload.monthly_income * 12, 1)
-    risk_score = min(0.95, (emi_ratio * 0.55) + (amount_ratio * 0.25))
-    return round(risk_score, 2)
-
-
 @app.post("/loan-applications", response_model=LoanApplicationRead, status_code=status.HTTP_201_CREATED)
 def create_loan_application(
     payload: LoanApplicationCreate,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LoanApplication:
+    eligibility = calculate_eligibility(
+        monthly_income=payload.monthly_income,
+        existing_emi=payload.existing_emi,
+        loan_amount=payload.loan_amount,
+        employment_type=payload.employment_type,
+    )
     application = LoanApplication(
         user_id=current_user.id,
         loan_type=payload.loan_type,
@@ -141,13 +143,27 @@ def create_loan_application(
         existing_emi=payload.existing_emi,
         application_status="submitted",
         credit_decision="pending",
-        risk_score=_calculate_risk_score(payload),
-        remarks=payload.remarks,
+        risk_score=eligibility["risk_score"],
+        remarks=f"{payload.remarks or ''}\nEligibility: {eligibility['recommendation']}".strip(),
     )
     db.add(application)
     db.commit()
     db.refresh(application)
     return application
+
+
+@app.post("/loan-applications/eligibility", response_model=EligibilityResponse)
+def check_loan_eligibility(
+    payload: EligibilityRequest,
+    _: User = Depends(get_current_user),
+) -> dict[str, object]:
+    return calculate_eligibility(
+        monthly_income=payload.monthly_income,
+        existing_emi=payload.existing_emi,
+        loan_amount=payload.loan_amount,
+        employment_type=payload.employment_type,
+        missing_documents=payload.missing_documents,
+    )
 
 
 @app.get("/loan-applications", response_model=list[LoanApplicationRead])
@@ -308,25 +324,12 @@ def chatbot(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ChatResponse:
-    context, sources = retrieve_context(payload.message)
-    history_rows = (
-        db.query(ChatbotLog)
-        .filter(ChatbotLog.user_id == current_user.id)
-        .order_by(ChatbotLog.timestamp.desc())
-        .limit(4)
-        .all()
+    answer, sources = answer_user_question(
+        db=db,
+        user=current_user,
+        message=payload.message,
+        application_id=payload.application_id,
     )
-    conversation: list[dict[str, str]] = []
-    for row in reversed(history_rows):
-        conversation.append({"role": "user", "content": row.message})
-        conversation.append({"role": "assistant", "content": row.bot_response})
-    try:
-        answer = chat_completion(payload.message, context=context, conversation=conversation)
-    except OpenRouterError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
-
-    db.add(ChatbotLog(user_id=current_user.id, message=payload.message, bot_response=answer))
-    db.commit()
     return ChatResponse(answer=answer, sources=sources)
 
 
